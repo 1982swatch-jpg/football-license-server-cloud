@@ -104,6 +104,9 @@ async def take_action(serial_id: int, action: str, days: int = None):
 # ===== 管理員帳號管理 =====
 
 @app.get("/api/admin/users")
+106:@app.get("/api/admin/users")
+123:@app.post("/api/admin/users/add")
+152:@app.post("/api/admin/users/delete")
 async def list_users():
     db = models.SessionLocal()
     try:
