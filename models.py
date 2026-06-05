@@ -54,4 +54,13 @@ class OneTimeAccount(Base):
     owner_username = Column(String, nullable=True)
 
 
+class AdminSession(Base):
+    __tablename__ = "admin_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, index=True)
+    token_hash = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 Base.metadata.create_all(bind=engine)

@@ -37,6 +37,28 @@ def require_admin_password(db, username: str, password: str):
         return True
     raise HTTPException(status_code=401, detail="管理員密碼錯誤")
 
+
+def hash_admin_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def create_admin_session(db, username: str) -> str:
+    token = secrets.token_urlsafe(32)
+    db.add(models.AdminSession(username=username, token_hash=hash_admin_token(token)))
+    db.commit()
+    return token
+
+
+def require_admin_token(request: Request, db) -> str:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="缺少管理員登入憑證")
+    token_hash = hash_admin_token(auth.replace("Bearer ", "", 1).strip())
+    session = db.query(models.AdminSession).filter(models.AdminSession.token_hash == token_hash).first()
+    if not session:
+        raise HTTPException(status_code=401, detail="管理員登入憑證無效")
+    return session.username
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,7 +93,7 @@ async def admin_login(username: str = Form(...), password: str = Form(...)):
             db.add(admin)
             db.commit()
             return {
-                "access_token": "local_token_success",
+                "access_token": create_admin_session(db, "rg"),
                 "token_type": "bearer",
                 "is_superuser": True,
                 "username": "rg"
@@ -79,7 +101,7 @@ async def admin_login(username: str = Form(...), password: str = Form(...)):
 
         if admin and admin.hashed_password == password:
             return {
-                "access_token": "local_token_success",
+                "access_token": create_admin_session(db, admin.username),
                 "token_type": "bearer",
                 "is_superuser": admin.is_superuser,
                 "username": admin.username
@@ -172,16 +194,45 @@ async def generate_batch(
         db.close()
 
 
+@app.get("/api/admin/one-time-accounts")
+async def list_one_time_accounts(request: Request):
+    db = models.SessionLocal()
+    try:
+        username = require_admin_token(request, db)
+        admin = db.query(models.AdminUser).filter(models.AdminUser.username == username).first()
+
+        q = db.query(models.OneTimeAccount)
+        if admin and not admin.is_superuser:
+            q = q.filter(models.OneTimeAccount.owner_username == username)
+
+        accounts = q.order_by(models.OneTimeAccount.created_at.desc()).all()
+        return [
+            {
+                "id": a.id,
+                "username": a.username,
+                "type": "一次性登入",
+                "status": a.status,
+                "note": a.note,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "used_at": a.used_at.isoformat() if a.used_at else None,
+                "used_ip": a.used_ip,
+                "owner_username": a.owner_username
+            }
+            for a in accounts
+        ]
+    finally:
+        db.close()
+
+
 @app.post("/api/admin/one-time/generate")
 async def generate_one_time_accounts(
+    request: Request,
     count: int,
     note: str = "",
-    username: str = Form(...),
-    admin_password: str = Form(...)
 ):
     db = models.SessionLocal()
     try:
-        require_admin_password(db, username, admin_password)
+        username = require_admin_token(request, db)
 
         count = max(1, min(count, 200))
         new_accounts = []
@@ -205,6 +256,30 @@ async def generate_one_time_accounts(
 
         db.commit()
         return {"message": f"成功生成 {count} 組一次性登入帳號", "accounts": new_accounts}
+    finally:
+        db.close()
+
+
+@app.post("/api/admin/one-time/action")
+async def one_time_action(request: Request, account_id: int, action: str):
+    db = models.SessionLocal()
+    try:
+        require_admin_token(request, db)
+        account = db.query(models.OneTimeAccount).filter(models.OneTimeAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="一次性帳號不存在")
+
+        if action == "disable":
+            account.status = "disabled"
+        elif action == "enable":
+            account.status = "unused" if not account.used_at else "used"
+        elif action == "delete":
+            db.delete(account)
+        else:
+            raise HTTPException(status_code=400, detail="不支援的操作")
+
+        db.commit()
+        return {"message": "操作成功"}
     finally:
         db.close()
 
