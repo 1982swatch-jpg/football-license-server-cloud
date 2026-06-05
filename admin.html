@@ -74,6 +74,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
 .badge-active{background:rgba(16,185,129,0.1);color:#10b981;}
 .badge-expired{background:rgba(239,68,68,0.1);color:#ef4444;}
 .badge-disabled{background:rgba(245,158,11,0.1);color:#f59e0b;}
+.badge-used-once{background:rgba(139,92,246,0.1);color:#a78bfa;}
 
 .btn{padding:10px 18px;border-radius:8px;border:none;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:0.2s;}
 .btn-primary{background:var(--accent);color:#fff;}
@@ -179,14 +180,14 @@ tr:hover td{background:rgba(255,255,255,0.02);}
                 <div class="tab active" onclick="setFilter('')">全部</div>
                 <div class="tab" onclick="setFilter('單次')">單次序號</div>
                 <div class="tab" onclick="setFilter('天')">時效序號</div>
-                <div class="tab" onclick="setFilter('一次性')">一次性帳號</div>
+                <div class="tab" onclick="setFilter('一次性')">一次性序號</div>
             </div>
             <div class="table-toolbar">
                 <div class="search-wrapper"><input type="text" class="search-input" id="kw" placeholder="搜尋序號或備註..." oninput="renderTable()"></div>
                 <button class="btn btn-outline btn-sm" onclick="loadAll()">🔄 重新整理</button>
             </div>
             <table>
-                <thead><tr><th>序號 / 帳號</th><th>類型</th><th>狀態</th><th>備註</th><th>啟用時間</th><th>過期時間</th><th>創建時間</th><th>操作</th></tr></thead>
+                <thead><tr><th>序號</th><th>類型</th><th>狀態</th><th>備註</th><th>啟用時間</th><th>過期時間</th><th>創建時間</th><th>操作</th></tr></thead>
                 <tbody id="tbl-body"></tbody>
             </table>
             <div class="pagination">
@@ -217,8 +218,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
 <div class="overlay" id="dlg-add"><div class="modal">
     <div class="modal-header"><h3>✨ 新增序號</h3><span style="cursor:pointer" onclick="closeModal('dlg-add')">✕</span></div>
     <div class="field"><label>生成數量 (1-200)</label><input type="number" id="g-count" value="1"></div>
-    <div class="field"><label>生成類型</label><select id="g-kind" onchange="toggleGenerateKind()"><option value="serial">一般序號</option><option value="one-time">一次性登入帳號</option></select></div>
-    <div class="field" id="g-days-wrap"><label>序號類型</label><select id="g-days"><option value="1">1 天試用</option><option value="7">7 天</option><option value="30">30 天</option><option value="365">1 年</option><option value="9999">永久</option></select></div>
+    <div class="field"><label>序號類型</label><select id="g-days"><option value="0">一次性登入</option><option value="1">1 天試用</option><option value="7">7 天</option><option value="30">30 天</option><option value="365">1 年</option><option value="9999">永久</option></select></div>
     <div class="field"><label>管理備註</label><input type="text" id="g-note" placeholder="例如：管理員"></div>
     <div style="display:flex; gap:12px; margin-top:20px;"><button class="btn btn-outline" style="flex:1; justify-content:center;" onclick="closeModal('dlg-add')">取消</button><button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="doGenerate()">確認新增</button></div>
 </div></div>
@@ -311,27 +311,8 @@ window.onload = () => {
 async function loadAll() {
     try {
         const currentUser = sessionStorage.getItem('admin_name') || 'rg';
-        const token = sessionStorage.getItem('admin_token') || '';
         const res = await fetch('/api/admin/licenses?username=' + encodeURIComponent(currentUser));
-        const serials = await res.json();
-        let oneTime = [];
-        try {
-            const otRes = await fetch('/api/admin/one-time-accounts', {
-                headers: { 'Authorization': 'Bearer ' + token }
-            });
-            if (otRes.ok) oneTime = await otRes.json();
-        } catch(e) {}
-        allData = serials.concat(oneTime.map(a => ({
-            id: a.id,
-            serial_code: a.username,
-            type: '一次性帳號',
-            status: a.status,
-            note: a.note,
-            activation_date: a.used_at,
-            expiry_date: null,
-            created_at: a.created_at,
-            is_one_time: true
-        })));
+        allData = await res.json();
         updateStats(); renderTable();
     } catch(e) { toast('數據加載失敗', 'danger'); }
 }
@@ -340,7 +321,7 @@ function updateStats() {
     document.getElementById('s-total').innerText = allData.length;
     document.getElementById('s-unused').innerText = allData.filter(l => l.status === 'unused').length;
     document.getElementById('s-active').innerText = allData.filter(l => l.status === 'active').length;
-    document.getElementById('s-expired').innerText = allData.filter(l => l.status === 'expired' || l.status === 'disabled').length;
+    document.getElementById('s-expired').innerText = allData.filter(l => l.status === 'expired' || l.status === 'disabled' || l.status === 'used_once').length;
 }
 
 function switchMainView(view, el) {
@@ -386,11 +367,8 @@ function renderTable() {
     renderPager();
 }
 
-function badge(s) { const map = { unused: ['未使用', 'badge-unused'], active: ['啟用中', 'badge-active'], used: ['已使用', 'badge-active'], expired: ['已過期', 'badge-expired'], disabled: ['已停用', 'badge-disabled'] }; const i = map[s] || [s, 'badge-unused']; return `<span class="badge ${i[1]}">${i[0]}</span>`; }
+function badge(s) { const map = { unused: ['未使用', 'badge-unused'], active: ['啟用中', 'badge-active'], used_once: ['已用完', 'badge-used-once'], expired: ['已過期', 'badge-expired'], disabled: ['已停用', 'badge-disabled'] }; const i = map[s] || [s, 'badge-unused']; return `<span class="badge ${i[1]}">${i[0]}</span>`; }
 function renderActions(l) {
-    if(l.is_one_time) {
-        return `<div class="action-links"><span onclick="actOneTime(${l.id}, '${l.status === 'disabled' ? 'enable' : 'disable'}')">${l.status === 'disabled' ? '啟用' : '停用'}</span><span class="act-red" onclick="actOneTime(${l.id}, 'delete')">刪除</span></div>`;
-    }
     return `<div class="action-links"><span onclick="changeDays(${l.id}, '${l.type}')">編輯</span><span onclick="act(${l.id}, '${l.status === 'disabled' ? 'enable' : 'disable'}')">${l.status === 'disabled' ? '啟用' : '停用'}</span><span class="act-red" onclick="act(${l.id}, 'delete')">刪除</span></div>`;
 }
 function fmtDate(d) { if(!d) return '-'; const date = new Date(d); return date.getFullYear() + '-' + (date.getMonth()+1).toString().padStart(2,'0') + '-' + date.getDate().toString().padStart(2,'0') + ' ' + date.getHours().toString().padStart(2,'0') + ':' + date.getMinutes().toString().padStart(2,'0'); }
@@ -400,11 +378,9 @@ function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
 async function doGenerate() {
     const c = document.getElementById('g-count').value;
-    const kind = document.getElementById('g-kind').value;
     const d = document.getElementById('g-days').value;
     const n = document.getElementById('g-note').value;
     const currentUser = sessionStorage.getItem('admin_name') || 'rg';
-    if(kind === 'one-time') return doGenerateOneTimeFromModal(c, n);
 
     try {
         const body = new URLSearchParams({
@@ -425,42 +401,8 @@ async function doGenerate() {
         toast('失敗', 'danger');
     }
 }async function act(id, a) { if(!confirm(`確定執行 ${a} 嗎？`)) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=${a}`, { method: 'POST' }); if(res.ok) { toast('成功'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
-function toggleGenerateKind() {
-    document.getElementById('g-days-wrap').style.display = document.getElementById('g-kind').value === 'one-time' ? 'none' : 'block';
-}
-async function doGenerateOneTimeFromModal(count, note) {
-    const c = Math.max(1, Math.min(parseInt(count, 10) || 1, 200));
-    const currentUser = sessionStorage.getItem('admin_name') || 'rg';
-    const token = sessionStorage.getItem('admin_token') || '';
-    const body = new URLSearchParams({
-        username: currentUser
-    });
-
-    try {
-        const res = await fetch(`/api/admin/one-time/generate?count=${c}&note=${encodeURIComponent(note)}`, {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + token },
-            body: body
-        });
-        const data = await res.json();
-
-        if(!res.ok) {
-            toast(data.detail || '生成失敗', 'danger');
-            return;
-        }
-
-        const lines = (data.accounts || []).map(a => `${a.username} / ${a.password}`).join('\n');
-        prompt('一次性帳號已生成，密碼只會顯示這一次，請立即複製：', lines);
-        closeModal('dlg-add');
-        toast('一次性帳號生成成功');
-        loadAll();
-    } catch(e) {
-        toast('一次性帳號生成失敗', 'danger');
-    }
-}
-async function actOneTime(id, a) { if(!confirm(`確定執行 ${a} 嗎？`)) return; try { const token = sessionStorage.getItem('admin_token') || ''; const res = await fetch(`/api/admin/one-time/action?account_id=${id}&action=${a}`, { method: 'POST', headers: { 'Authorization': 'Bearer ' + token } }); if(res.ok) { toast('成功'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
 async function confirmClear() { if(!confirm('⚠ 確定清空全部？')) return; try { const res = await fetch(`/api/admin/clear-all`, { method: 'POST' }); if(res.ok) { toast('已清空'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
-async function changeDays(id, ct) { const d = prompt("輸入新天數：", ct.replace(" 天", "")); if(d === null) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=update_days&days=${d}`, { method: 'POST' }); if(res.ok) { toast('已更新'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
+async function changeDays(id, ct) { const d = prompt("輸入新天數，0 代表一次性登入：", ct.includes("一次性") ? "0" : ct.replace(" 天", "")); if(d === null) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=update_days&days=${d}`, { method: 'POST' }); if(res.ok) { toast('已更新'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
 async function doChangePass() { const body = new URLSearchParams({ old_user: document.getElementById('p-old-user').value, old_pass: document.getElementById('p-old-pass').value, new_user: document.getElementById('p-new-user').value, new_pass: document.getElementById('p-new-pass').value }); try { const res = await fetch(`/api/admin/change-password`, { method: 'POST', body: body }); if(res.ok) { toast('成功，請重登'); setTimeout(() => doLogout(), 1500); } else { toast('失敗，請查舊帳密', 'danger'); } } catch(e) { toast('錯誤', 'danger'); } }
 function renderPager() { const ps = Math.ceil(filtered.length / PER), c = document.getElementById('pager-btns'); let h = ''; for(let i=1; i<=ps; i++) h += `<div class="pager-btn ${i === page ? 'active' : ''}" onclick="goPage(${i})">${i}</div>`; c.innerHTML = h; }
 function goPage(p) { page = p; renderTable(); }

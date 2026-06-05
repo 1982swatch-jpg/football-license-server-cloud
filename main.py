@@ -6,58 +6,12 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 from sqlalchemy import text
 import models
-import hashlib
-import secrets
 import random
 import string
 import uvicorn
 import os
 
 app = FastAPI(title="序號管理系統")
-
-
-def hash_one_time_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    digest = hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
-    return f"{salt}:{digest}"
-
-
-def verify_one_time_password(password: str, stored_hash: str) -> bool:
-    try:
-        salt, digest = stored_hash.split(":", 1)
-    except ValueError:
-        return False
-    candidate = hashlib.sha256(f"{salt}:{password}".encode("utf-8")).hexdigest()
-    return secrets.compare_digest(candidate, digest)
-
-
-def require_admin_password(db, username: str, password: str):
-    admin = db.query(models.AdminUser).filter(models.AdminUser.username == username).first()
-    if admin and admin.hashed_password == password:
-        return True
-    raise HTTPException(status_code=401, detail="管理員密碼錯誤")
-
-
-def hash_admin_token(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def create_admin_session(db, username: str) -> str:
-    token = secrets.token_urlsafe(32)
-    db.add(models.AdminSession(username=username, token_hash=hash_admin_token(token)))
-    db.commit()
-    return token
-
-
-def require_admin_token(request: Request, db) -> str:
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="缺少管理員登入憑證")
-    token_hash = hash_admin_token(auth.replace("Bearer ", "", 1).strip())
-    session = db.query(models.AdminSession).filter(models.AdminSession.token_hash == token_hash).first()
-    if not session:
-        raise HTTPException(status_code=401, detail="管理員登入憑證無效")
-    return session.username
 
 app.add_middleware(
     CORSMiddleware,
@@ -93,7 +47,7 @@ async def admin_login(username: str = Form(...), password: str = Form(...)):
             db.add(admin)
             db.commit()
             return {
-                "access_token": create_admin_session(db, "rg"),
+                "access_token": "ok",
                 "token_type": "bearer",
                 "is_superuser": True,
                 "username": "rg"
@@ -101,7 +55,7 @@ async def admin_login(username: str = Form(...), password: str = Form(...)):
 
         if admin and admin.hashed_password == password:
             return {
-                "access_token": create_admin_session(db, admin.username),
+                "access_token": "ok",
                 "token_type": "bearer",
                 "is_superuser": admin.is_superuser,
                 "username": admin.username
@@ -125,7 +79,7 @@ async def get_stats(username: str = "rg"):
         total = q.count()
         unused = q.filter(models.License.status == "unused").count()
         active = q.filter(models.License.status == "active").count()
-        expired = q.filter(models.License.status.in_(["expired", "disabled"])).count()
+        expired = q.filter(models.License.status.in_(["expired", "disabled", "used_once"])).count()
 
         return {"total": total, "unused": unused, "active": active, "expired": expired}
     finally:
@@ -178,9 +132,11 @@ async def generate_batch(
         for _ in range(count):
             code = "-".join("".join(random.choices(chars, k=4)) for _ in range(3))
 
+            license_type = "一次性登入" if days == 0 else f"{days} 天"
+
             db.add(models.License(
                 serial_code=code,
-                type=f"{days} 天",
+                type=license_type,
                 status="unused",
                 note=note,
                 owner_username=username
@@ -190,96 +146,6 @@ async def generate_batch(
 
         db.commit()
         return {"message": f"成功生成 {count} 組序號", "codes": new_codes}
-    finally:
-        db.close()
-
-
-@app.get("/api/admin/one-time-accounts")
-async def list_one_time_accounts(request: Request):
-    db = models.SessionLocal()
-    try:
-        username = require_admin_token(request, db)
-        admin = db.query(models.AdminUser).filter(models.AdminUser.username == username).first()
-
-        q = db.query(models.OneTimeAccount)
-        if admin and not admin.is_superuser:
-            q = q.filter(models.OneTimeAccount.owner_username == username)
-
-        accounts = q.order_by(models.OneTimeAccount.created_at.desc()).all()
-        return [
-            {
-                "id": a.id,
-                "username": a.username,
-                "type": "一次性登入",
-                "status": a.status,
-                "note": a.note,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "used_at": a.used_at.isoformat() if a.used_at else None,
-                "used_ip": a.used_ip,
-                "owner_username": a.owner_username
-            }
-            for a in accounts
-        ]
-    finally:
-        db.close()
-
-
-@app.post("/api/admin/one-time/generate")
-async def generate_one_time_accounts(
-    request: Request,
-    count: int,
-    note: str = "",
-):
-    db = models.SessionLocal()
-    try:
-        username = require_admin_token(request, db)
-
-        count = max(1, min(count, 200))
-        new_accounts = []
-
-        for _ in range(count):
-            while True:
-                account_name = "FT-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
-                exists = db.query(models.OneTimeAccount).filter(models.OneTimeAccount.username == account_name).first()
-                if not exists:
-                    break
-
-            password = "".join(random.choices(string.ascii_letters + string.digits, k=8))
-            db.add(models.OneTimeAccount(
-                username=account_name,
-                password_hash=hash_one_time_password(password),
-                status="unused",
-                note=note,
-                owner_username=username
-            ))
-            new_accounts.append({"username": account_name, "password": password})
-
-        db.commit()
-        return {"message": f"成功生成 {count} 組一次性登入帳號", "accounts": new_accounts}
-    finally:
-        db.close()
-
-
-@app.post("/api/admin/one-time/action")
-async def one_time_action(request: Request, account_id: int, action: str):
-    db = models.SessionLocal()
-    try:
-        require_admin_token(request, db)
-        account = db.query(models.OneTimeAccount).filter(models.OneTimeAccount.id == account_id).first()
-        if not account:
-            raise HTTPException(status_code=404, detail="一次性帳號不存在")
-
-        if action == "disable":
-            account.status = "disabled"
-        elif action == "enable":
-            account.status = "unused" if not account.used_at else "used"
-        elif action == "delete":
-            db.delete(account)
-        else:
-            raise HTTPException(status_code=400, detail="不支援的操作")
-
-        db.commit()
-        return {"message": "操作成功"}
     finally:
         db.close()
 
@@ -350,12 +216,21 @@ async def take_action(serial_id: int, action: str, days: int = None):
         if action == "disable":
             lic.status = "disabled"
         elif action == "enable":
-            lic.status = "active" if lic.activation_date else "unused"
+            if lic.type == "一次性登入":
+                lic.status = "unused" if lic.status != "used_once" else "used_once"
+            else:
+                lic.status = "active" if lic.activation_date else "unused"
         elif action == "delete":
             db.delete(lic)
         elif action == "update_days" and days is not None:
-            lic.type = f"{days} 天"
-            if lic.status == "active" and lic.activation_date:
+            if days == 0:
+                lic.type = "一次性登入"
+                lic.expiry_date = None
+                if lic.status not in ("used_once", "disabled"):
+                    lic.status = "unused"
+            else:
+                lic.type = f"{days} 天"
+            if days != 0 and lic.status == "active" and lic.activation_date:
                 lic.expiry_date = lic.activation_date + timedelta(days=days)
 
         db.commit()
@@ -376,6 +251,9 @@ async def verify_serial(code: str, request: Request):
         if lic.status == "disabled":
             return {"valid": False, "message": "此序號已被停用"}
 
+        if lic.status == "used_once":
+            return {"valid": False, "message": "此一次性序號已使用完畢"}
+
         now = datetime.utcnow()
 
         if lic.status == "active":
@@ -393,6 +271,21 @@ async def verify_serial(code: str, request: Request):
             }
 
         if lic.status == "unused":
+            if lic.type == "一次性登入":
+                lic.status = "used_once"
+                lic.activation_date = now
+                lic.expiry_date = None
+                lic.last_login_ip = request.client.host
+                db.commit()
+
+                return {
+                    "valid": True,
+                    "days_left": 0,
+                    "expiry": "一次性登入已使用",
+                    "first_time": True,
+                    "one_time": True
+                }
+
             try:
                 days = int(lic.type.split(" ")[0])
             except Exception:
@@ -417,36 +310,6 @@ async def verify_serial(code: str, request: Request):
         db.close()
 
 
-@app.post("/api/one-time-login")
-async def one_time_login(request: Request, username: str = Form(...), password: str = Form(...)):
-    db = models.SessionLocal()
-    try:
-        account = db.query(models.OneTimeAccount).filter(models.OneTimeAccount.username == username).first()
-
-        if not account or not account.password_hash or not verify_one_time_password(password, account.password_hash):
-            return {"valid": False, "message": "一次性帳號或密碼錯誤"}
-
-        if account.status == "disabled":
-            return {"valid": False, "message": "此一次性帳號已停用"}
-
-        if account.status == "used" or account.used_at:
-            return {"valid": False, "message": "此一次性帳號已使用，無法再次登入"}
-
-        account.status = "used"
-        account.used_at = datetime.utcnow()
-        account.used_ip = request.client.host
-        db.commit()
-
-        return {
-            "valid": True,
-            "message": "一次性登入成功",
-            "username": account.username,
-            "used_at": account.used_at.isoformat()
-        }
-    finally:
-        db.close()
-
-
 class ImportSerial(BaseModel):
     code: str
     days: int = 30
@@ -464,7 +327,7 @@ async def import_serial(data: ImportSerial):
 
         db.add(models.License(
             serial_code=data.code,
-            type=f"{data.days} 天",
+            type="一次性登入" if data.days == 0 else f"{data.days} 天",
             status="unused",
             note=data.note,
             owner_username="gt5889"

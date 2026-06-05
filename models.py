@@ -40,27 +40,4 @@ class AdminUser(Base):
     is_superuser = Column(Boolean, default=False)
 
 
-class OneTimeAccount(Base):
-    __tablename__ = "one_time_accounts"
-
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    password_hash = Column(String)
-    status = Column(String, default="unused")
-    note = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    used_at = Column(DateTime, nullable=True)
-    used_ip = Column(String, nullable=True)
-    owner_username = Column(String, nullable=True)
-
-
-class AdminSession(Base):
-    __tablename__ = "admin_sessions"
-
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, index=True)
-    token_hash = Column(String, unique=True, index=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-
 Base.metadata.create_all(bind=engine)
