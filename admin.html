@@ -162,6 +162,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
             <h1 class="header-title">我的序號</h1>
             <div class="header-actions">
                 <button class="btn btn-primary" onclick="showModal('dlg-add')">＋ 新增序號</button>
+                <button class="btn btn-outline" onclick="doGenerateOneTime()">⚡ 一次性帳號</button>
                 <button class="btn btn-danger" onclick="confirmClear()">⚠ 清空全部</button>
             </div>
         </div>
@@ -308,7 +309,8 @@ window.onload = () => {
 
 async function loadAll() {
     try {
-        const res = await fetch('/api/admin/licenses');
+        const currentUser = sessionStorage.getItem('admin_name') || 'rg';
+        const res = await fetch('/api/admin/licenses?username=' + encodeURIComponent(currentUser));
         allData = await res.json();
         updateStats(); renderTable();
     } catch(e) { toast('數據加載失敗', 'danger'); }
@@ -370,8 +372,67 @@ function toast(msg, type = 'success') { const w = document.getElementById('tw'),
 function cp(text) { navigator.clipboard.writeText(text); toast('已複製'); }
 function showModal(id) { document.getElementById(id).classList.add('show'); }
 function closeModal(id) { document.getElementById(id).classList.remove('show'); }
-async function doGenerate() { const c = document.getElementById('g-count').value, d = document.getElementById('g-days').value, n = document.getElementById('g-note').value; try { const res = await fetch(`/api/admin/generate?count=${c}&days=${d}&note=${encodeURIComponent(n)}`, { method: 'POST' }); if(res.ok) { toast(`生成成功`); closeModal('dlg-add'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
-async function act(id, a) { if(!confirm(`確定執行 ${a} 嗎？`)) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=${a}`, { method: 'POST' }); if(res.ok) { toast('成功'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
+async function doGenerate() {
+    const c = document.getElementById('g-count').value;
+    const d = document.getElementById('g-days').value;
+    const n = document.getElementById('g-note').value;
+    const currentUser = sessionStorage.getItem('admin_name') || 'rg';
+
+    try {
+        const body = new URLSearchParams({
+            username: currentUser
+        });
+
+        const res = await fetch(`/api/admin/generate?count=${c}&days=${d}&note=${encodeURIComponent(n)}`, {
+            method: 'POST',
+            body: body
+        });
+
+        if(res.ok) {
+            toast(`生成成功`);
+            closeModal('dlg-add');
+            loadAll();
+        }
+    } catch(e) {
+        toast('失敗', 'danger');
+    }
+}async function act(id, a) { if(!confirm(`確定執行 ${a} 嗎？`)) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=${a}`, { method: 'POST' }); if(res.ok) { toast('成功'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
+async function doGenerateOneTime() {
+    const count = prompt('要生成幾組一次性登入帳號？', '1');
+    if(count === null) return;
+
+    const c = Math.max(1, Math.min(parseInt(count, 10) || 1, 200));
+    const note = prompt('備註（可留空）：', '一次性登入');
+    if(note === null) return;
+
+    const adminPassword = prompt('請輸入目前管理員密碼確認：');
+    if(!adminPassword) return;
+
+    const currentUser = sessionStorage.getItem('admin_name') || 'rg';
+    const body = new URLSearchParams({
+        username: currentUser,
+        admin_password: adminPassword
+    });
+
+    try {
+        const res = await fetch(`/api/admin/one-time/generate?count=${c}&note=${encodeURIComponent(note)}`, {
+            method: 'POST',
+            body: body
+        });
+        const data = await res.json();
+
+        if(!res.ok) {
+            toast(data.detail || '生成失敗', 'danger');
+            return;
+        }
+
+        const lines = (data.accounts || []).map(a => `${a.username} / ${a.password}`).join('\n');
+        prompt('一次性帳號已生成，密碼只會顯示這一次，請立即複製：', lines);
+        toast('一次性帳號生成成功');
+    } catch(e) {
+        toast('一次性帳號生成失敗', 'danger');
+    }
+}
 async function confirmClear() { if(!confirm('⚠ 確定清空全部？')) return; try { const res = await fetch(`/api/admin/clear-all`, { method: 'POST' }); if(res.ok) { toast('已清空'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
 async function changeDays(id, ct) { const d = prompt("輸入新天數：", ct.replace(" 天", "")); if(d === null) return; try { const res = await fetch(`/api/admin/action?serial_id=${id}&action=update_days&days=${d}`, { method: 'POST' }); if(res.ok) { toast('已更新'); loadAll(); } } catch(e) { toast('失敗', 'danger'); } }
 async function doChangePass() { const body = new URLSearchParams({ old_user: document.getElementById('p-old-user').value, old_pass: document.getElementById('p-old-pass').value, new_user: document.getElementById('p-new-user').value, new_pass: document.getElementById('p-new-pass').value }); try { const res = await fetch(`/api/admin/change-password`, { method: 'POST', body: body }); if(res.ok) { toast('成功，請重登'); setTimeout(() => doLogout(), 1500); } else { toast('失敗，請查舊帳密', 'danger'); } } catch(e) { toast('錯誤', 'danger'); } }

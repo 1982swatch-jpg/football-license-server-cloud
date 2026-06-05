@@ -290,6 +290,7 @@ body{
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('admin')" id="tab-admin">🔐 管理員登入</button>
       <button class="tab-btn" onclick="switchTab('serial')" id="tab-serial">🔑 序號驗證</button>
+      <button class="tab-btn" onclick="switchTab('one-time')" id="tab-one-time">⚡ 一次性帳號</button>
     </div>
 
     <!-- ── 管理員登入面板 ── -->
@@ -336,6 +337,28 @@ body{
       <button class="submit-btn" id="btn-serial" onclick="doSerialVerify()">驗證序號</button>
     </div>
 
+    <!-- ── 一次性帳號面板 ── -->
+    <div id="panel-one-time" style="display:none">
+      <div class="serial-badge">✦ ONE-TIME LOGIN</div>
+      <div class="card-title">一次性帳號登入</div>
+      <div class="card-sub">此帳號成功登入一次後即失效，無法再次使用</div>
+
+      <div id="alert-one-time" class="alert err"></div>
+
+      <div class="field">
+        <label>一次性帳號 ACCOUNT</label>
+        <input type="text" id="ot-user" placeholder="FT-XXXXXX"
+               autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label>一次性密碼 PASSWORD</label>
+        <input type="password" id="ot-pass" placeholder="輸入一次性密碼"
+               autocomplete="off" />
+      </div>
+
+      <button class="submit-btn" id="btn-one-time" onclick="doOneTimeLogin()">登入分析系統</button>
+    </div>
+
   </div><!-- /.card -->
 
   <div class="footer">
@@ -352,10 +375,13 @@ const API = '';   // 同一伺服器，直接用相對路徑
 function switchTab(tab) {
   document.getElementById('panel-admin').style.display  = tab === 'admin'  ? '' : 'none';
   document.getElementById('panel-serial').style.display = tab === 'serial' ? '' : 'none';
+  document.getElementById('panel-one-time').style.display = tab === 'one-time' ? '' : 'none';
   document.getElementById('tab-admin').classList.toggle('active',  tab === 'admin');
   document.getElementById('tab-serial').classList.toggle('active', tab === 'serial');
+  document.getElementById('tab-one-time').classList.toggle('active', tab === 'one-time');
   document.getElementById('alert-admin').style.display  = 'none';
   document.getElementById('alert-serial').style.display = 'none';
+  document.getElementById('alert-one-time').style.display = 'none';
 }
 
 // ── 顯示提示 ────────────────────────────────────────────────────────────
@@ -384,6 +410,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('serial-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') doSerialVerify();
+  });
+  ['ot-user','ot-pass'].forEach(id => {
+    document.getElementById(id)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') doOneTimeLogin();
+    });
   });
 
   // 自動填入記住的帳號
@@ -514,6 +545,49 @@ async function doSerialVerify() {
 
   btn.disabled  = false;
   btn.innerHTML = '驗證序號';
+}
+
+// ── 一次性帳號登入 ───────────────────────────────────────────────────────
+async function doOneTimeLogin() {
+  const user = document.getElementById('ot-user').value.trim().toUpperCase();
+  const pass = document.getElementById('ot-pass').value;
+  const btn = document.getElementById('btn-one-time');
+  const alertId = 'alert-one-time';
+
+  if (!user || !pass) {
+    showAlert(alertId, '❌ 請輸入一次性帳號與密碼');
+    shakeCard(); return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>登入中...';
+  document.getElementById(alertId).style.display = 'none';
+
+  try {
+    const body = new URLSearchParams({ username: user, password: pass });
+    const res = await fetch(API + '/api/one-time-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString()
+    });
+    const data = await res.json();
+
+    if (res.ok && data.valid) {
+      showAlert(alertId, '✅ 一次性登入成功，帳號已失效，正在進入分析系統...', 'ok');
+      localStorage.setItem('fifa_analyzer_verified', 'true');
+      localStorage.setItem('current_active_serial', 'ONE-TIME:' + user);
+      setTimeout(() => { window.location.href = '/'; }, 1200);
+    } else {
+      showAlert(alertId, '❌ ' + (data.message || '一次性帳號登入失敗'));
+      shakeCard();
+    }
+  } catch (err) {
+    showAlert(alertId, '❌ 伺服器無法連線，請稍後再試');
+    shakeCard();
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '登入分析系統';
 }
 </script>
 </body>
